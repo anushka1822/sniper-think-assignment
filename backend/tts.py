@@ -1,0 +1,49 @@
+import os
+import asyncio
+import httpx
+from dotenv import load_dotenv
+
+load_dotenv()
+
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
+# Default voice: "Rachel" or "Adam"
+VOICE_ID = "21m00Tcm4TlvDq8ikWAM" # Rachel
+
+async def stream_tts(text: str):
+    """
+    Streams TTS audio bytes from ElevenLabs API for a given sentence.
+    Yields raw MP3 or PCM bytes depending on the configuration.
+    """
+    if not ELEVENLABS_API_KEY:
+        print("Warning: ElevenLabs API Key missing.")
+        return
+
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{VOICE_ID}/stream"
+    
+    headers = {
+        "Accept": "audio/mpeg",
+        "xi-api-key": ELEVENLABS_API_KEY,
+        "Content-Type": "application/json"
+    }
+    
+    data = {
+        "text": text,
+        "model_id": "eleven_monolingual_v1",
+        "voice_settings": {
+            "stability": 0.5,
+            "similarity_boost": 0.5
+        }
+    }
+
+    try:
+        async with httpx.AsyncClient() as client:
+            async with client.stream("POST", url, json=data, headers=headers) as response:
+                response.raise_for_status()
+                async for chunk in response.aiter_bytes(chunk_size=4096):
+                    if chunk:
+                        yield chunk
+    except asyncio.CancelledError:
+        print("ElevenLabs TTS stream cancelled.")
+        raise
+    except Exception as e:
+        print(f"ElevenLabs TTS error: {e}")

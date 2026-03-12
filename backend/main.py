@@ -42,6 +42,9 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
+from llm import generate_response_stream
+from tts import stream_tts
+
 @app.websocket("/ws/stream")
 async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
@@ -51,38 +54,122 @@ async def websocket_endpoint(websocket: WebSocket):
     dg_connection = deepgram.listen.asyncwebsocket.v("1")
     
     current_transcript = ""
-    state = "LISTENING"
+    state = "LISTENING" # LISTENING or SPEAKING
+    
+    # Track the active background task so we can cancel it via barge-in
+    active_generation_task = None
+    
+    # Queue for TTS audio to send back
+    audio_queue = asyncio.Queue()
+    
+    async def process_ai_response(text: str):
+        """
+        Background task that streams LLM and then streams TTS.
+        """
+        nonlocal state
+        try:
+            # 1. Stream the LLM response sentence by sentence
+            async for sentence in generate_response_stream(text):
+                print(f"LLM Sentence generated: {sentence}")
+                
+                # 2. For each sentence, stream the TTS audio bytes and queue them
+                async for audio_chunk in stream_tts(sentence):
+                    await audio_queue.put(audio_chunk)
+                    
+            # Put a sentinel value or empty bytes to indicate the end of speaking
+            await audio_queue.put(b"END_OF_AUDIO")
+        except asyncio.CancelledError:
+            print("process_ai_response was cancelled due to interruption.")
+            raise
+
+    async def audio_sender():
+        """
+        Continuously reads from audio_queue and sends to client.
+        """
+        nonlocal state
+        try:
+             while True:
+                chunk = await audio_queue.get()
+                if chunk == b"END_OF_AUDIO":
+                    print("Finished speaking audio queue.")
+                    state = "LISTENING"
+                    audio_queue.task_done()
+                    continue
+                # While we are sending out audio, we are officially "SPEAKING"
+                # The frontend expects binary data.
+                await websocket.send_bytes(chunk)
+                audio_queue.task_done()
+        except asyncio.CancelledError:
+             print("Audio sender task cancelled.")
+        except Exception as e:
+             print(f"Audio sender error: {e}")
+
+    sender_task = asyncio.create_task(audio_sender())
 
     async def on_message(self, result, **kwargs):
-        nonlocal current_transcript, state
+        nonlocal current_transcript, state, active_generation_task
         
         sentence = result.channel.alternatives[0].transcript
         if not sentence:
             return
+            
+        # BARGE-IN INTERRUPTION LOGIC
+        # If Deepgram hears anything with enough confidence while we are SPEAKING
+        if state == "SPEAKING" and len(sentence.strip()) > 3:
+            print(f"BARGE IN DETECTED: User said '{sentence}'")
+            
+            # 1. Cancel ongoing LLM + TTS streaming
+            if active_generation_task and not active_generation_task.done():
+                active_generation_task.cancel()
+            
+            # 2. Flush the outbound audio queue
+            while not audio_queue.empty():
+                try:
+                    audio_queue.get_nowait()
+                    audio_queue.task_done()
+                except asyncio.QueueEmpty:
+                    break
+                    
+            # 3. Send "interrupt" control message
+            await websocket.send_json({"type": "interrupt"})
+            
+            # 4. Return immediately to listening state
+            state = "LISTENING"
+            current_transcript = sentence # Keep this so we don't lose the interrupted bit
+            return
+            
 
-        # result.is_final means Deepgram has definitively recognized this chunk of audio
         if result.is_final:
             current_transcript += f" {sentence}"
-            
-            # If Deepgram determines it's the end of the spoken phrase (via endpointing)
-            # Some endpointing configs trigger speech_final instead of UtteranceEnd depending on exact audio, 
-            # so we check speech_final as well based on requirements.
             if result.speech_final:
-                state = "PROCESSING"
                 print(f"Turn Complete (speech_final): [{current_transcript.strip()}]")
+                
+                # Start generating AI response
+                state = "SPEAKING"
+                if active_generation_task and not active_generation_task.done():
+                     active_generation_task.cancel()
+                     
+                active_generation_task = asyncio.create_task(
+                    process_ai_response(current_transcript.strip())
+                )
+                
                 current_transcript = ""
-                state = "LISTENING"
-        else:
-            # Interim results (e.g. while the user is still speaking)
-            pass
 
     async def on_utterance_end(self, utterance_end, **kwargs):
-        nonlocal current_transcript, state
-        if current_transcript.strip():
-            state = "PROCESSING"
+        nonlocal current_transcript, state, active_generation_task
+        if current_transcript.strip() and state == "LISTENING":
             print(f"Turn Complete (UtteranceEnd): [{current_transcript.strip()}]")
+            
+            # Start generating AI response
+            state = "SPEAKING"
+            if active_generation_task and not active_generation_task.done():
+                 active_generation_task.cancel()
+                 
+            active_generation_task = asyncio.create_task(
+                process_ai_response(current_transcript.strip())
+            )
+            
             current_transcript = ""
-            state = "LISTENING"
 
     async def on_error(self, error, **kwargs):
         print(f"Deepgram Error: {error}")
@@ -111,10 +198,13 @@ async def websocket_endpoint(websocket: WebSocket):
     try:
         while True:
             # Receive raw PCM 16-bit, 16kHz mono audio chunks from the frontend
-            data = await websocket.receive_bytes()
-            
-            if state == "LISTENING":
+            message = await websocket.receive()
+            if "bytes" in message:
+                data = message["bytes"]
+                # Always send audio to Deepgram to monitor for barge-ins!
                 await dg_connection.send(data)
+            elif "text" in message:
+                print(f"Received text message from client: {message['text']}")
 
     except WebSocketDisconnect:
         print("Client disconnected from WebSocket")
@@ -123,3 +213,7 @@ async def websocket_endpoint(websocket: WebSocket):
     finally:
         manager.disconnect(websocket)
         await dg_connection.finish()
+        if sender_task:
+            sender_task.cancel()
+        if active_generation_task and not active_generation_task.done():
+            active_generation_task.cancel()
