@@ -30,7 +30,13 @@ app.add_middleware(
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
 
 if not DEEPGRAM_API_KEY:
-    print("WARNING: DEEPGRAM_API_KEY is not set in the environment.")
+    print("CRITICAL: DEEPGRAM_API_KEY is not set.")
+else:
+    print(f"Deepgram Key detected: {DEEPGRAM_API_KEY[:4]}...")
+
+@app.get("/")
+async def health_check():
+    return {"status": "healthy", "service": "Aura AI Backend"}
 
 class ConnectionManager:
     def __init__(self):
@@ -53,6 +59,12 @@ from tts import stream_tts
 async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
     
+    GROQ_KEY = os.getenv("GROQ_API_KEY")
+    ELEVEN_KEY = os.getenv("ELEVENLABS_API_KEY")
+    
+    if not GROQ_KEY or not ELEVEN_KEY:
+        print(f"CRITICAL: Missing Keys - Groq: {bool(GROQ_KEY)}, Eleven: {bool(ELEVEN_KEY)}")
+
     # Initialize Deepgram
     deepgram = DeepgramClient(DEEPGRAM_API_KEY)
     dg_connection = deepgram.listen.asynclive.v("1")
@@ -214,11 +226,12 @@ async def websocket_endpoint(websocket: WebSocket):
         utterance_end_ms="1000",
     )
 
+    print("Starting Deepgram connection...")
     if not await dg_connection.start(options):
-        print("Failed to start Deepgram connection")
+        print("CRITICAL: Failed to start Deepgram connection")
         return
-
-    print("Deepgram connection started. Waiting for audio...")
+    
+    print("SUCCESS: Deepgram connection started. Waiting for audio...")
 
     try:
         while True:
