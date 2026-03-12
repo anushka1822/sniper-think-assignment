@@ -1,36 +1,9 @@
 import os
 import asyncio
-import faiss
-import pickle
-import numpy as np
 from groq import AsyncGroq
 from dotenv import load_dotenv
-from sentence_transformers import SentenceTransformer
 
 load_dotenv()
-
-# Load RAG resources ONCE globally to prevent latency
-try:
-    rag_model = SentenceTransformer("all-MiniLM-L6-v2")
-    rag_index = faiss.read_index("faiss_index.bin")
-    with open("chunks.pkl", "rb") as f:
-        rag_chunks = pickle.load(f)
-    print("RAG loaded successfully.")
-except Exception as e:
-    print(f"RAG init failed: {e}. Running without RAG.")
-    rag_model, rag_index, rag_chunks = None, None, None
-
-def get_rag_context(query: str, top_k: int = 2) -> str:
-    if not rag_model or not rag_index or not rag_chunks:
-        return ""
-    
-    # Embed query and search
-    query_vector = rag_model.encode([query]).astype("float32")
-    distances, indices = rag_index.search(query_vector, top_k)
-    
-    # Retrieve text chunks
-    retrieved = [rag_chunks[i] for i in indices[0] if i < len(rag_chunks)]
-    return "\n".join(retrieved)
 
 async def generate_response_stream(prompt: str):
     """
@@ -43,21 +16,12 @@ async def generate_response_stream(prompt: str):
         yield "Error: Groq API key is missing."
         return
 
-    context = get_rag_context(prompt)
-    
     system_msg = (
         "You are a helpful voice assistant. "
         "Do not use markdown like asterisks or code blocks, as this is being read aloud by a human-like voice. "
+        "Keep responses brief and conversational."
     )
-    
-    if context:
-        system_msg += (
-            f"\n\nIf the following retrieved context is relevant, use it to answer the user. "
-            f"If the context does not contain the answer, or if the user is just making small talk, answer naturally using your own knowledge. "
-            f"Keep responses brief and conversational.\nContext:\n{context}"
-        )
 
-    # A simple prompt system to instruct the AI to keep answers concise for voice
     messages = [
         {"role": "system", "content": system_msg},
         {"role": "user", "content": prompt}
