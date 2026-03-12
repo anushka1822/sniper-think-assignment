@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
 os.environ["SSL_CERT_FILE"] = certifi.where()
-os.environ["SSL_CERT_DIR"] = certifi.where()
+os.environ["SSL_CERT_DIR"] = os.path.dirname(certifi.where())
 
 from deepgram import (
     DeepgramClient,
@@ -34,7 +34,7 @@ if not DEEPGRAM_API_KEY:
 else:
     print(f"Deepgram Key detected: {DEEPGRAM_API_KEY[:4]}...")
 
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 async def health_check():
     return {"status": "healthy", "service": "Aura AI Backend"}
 
@@ -226,9 +226,18 @@ async def websocket_endpoint(websocket: WebSocket):
         utterance_end_ms="1000",
     )
 
-    print("Starting Deepgram connection...")
-    if not await dg_connection.start(options):
-        print("CRITICAL: Failed to start Deepgram connection")
+    print("Starting Deepgram connection (timeout 10s)...")
+    try:
+        # Use a timeout to prevent hanging on Render's network
+        start_result = await asyncio.wait_for(dg_connection.start(options), timeout=10.0)
+        if not start_result:
+            print("CRITICAL: Failed to start Deepgram connection")
+            return
+    except asyncio.TimeoutError:
+        print("CRITICAL: Deepgram connection timed out after 10 seconds")
+        return
+    except Exception as e:
+        print(f"CRITICAL: Error starting Deepgram: {e}")
         return
     
     print("SUCCESS: Deepgram connection started. Waiting for audio...")
