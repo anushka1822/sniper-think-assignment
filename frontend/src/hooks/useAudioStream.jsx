@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback } from "react";
 
 // Use dynamic window location host, Vite will proxy the /ws requests safely to the Python server 
-const BACKEND_WS_URL = `ws://https://sniper-think-assignment.onrender.com/ws/stream`;
+const BACKEND_WS_URL = "wss://sniper-think-assignment.onrender.com/ws/stream";
 
 export function useAudioStream() {
   const [isConnected, setIsConnected] = useState(false);
