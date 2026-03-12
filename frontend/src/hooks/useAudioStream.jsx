@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback } from "react";
 
-const BACKEND_WS_URL = `ws://${window.location.hostname}:8000/ws/stream`;
+// Use dynamic window location host, Vite will proxy the /ws requests safely to the Python server 
+const BACKEND_WS_URL = `ws://${window.location.host}/ws/stream`;
 
 export function useAudioStream() {
   const [isConnected, setIsConnected] = useState(false);
