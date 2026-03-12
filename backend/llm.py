@@ -44,9 +44,18 @@ async def generate_response_stream(prompt: str):
         return
 
     context = get_rag_context(prompt)
-    system_msg = "You are a helpful voice assistant. Keep your answers concise, conversational, and direct. Do not use markdown like asterisks or code blocks, as this is being read aloud by a human-like voice."
+    
+    system_msg = (
+        "You are a helpful voice assistant. "
+        "Do not use markdown like asterisks or code blocks, as this is being read aloud by a human-like voice. "
+    )
+    
     if context:
-        system_msg += f"\n\nAnswer the user using only the following context:\n{context}"
+        system_msg += (
+            f"\n\nIf the following retrieved context is relevant, use it to answer the user. "
+            f"If the context does not contain the answer, or if the user is just making small talk, answer naturally using your own knowledge. "
+            f"Keep responses brief and conversational.\nContext:\n{context}"
+        )
 
     # A simple prompt system to instruct the AI to keep answers concise for voice
     messages = [
