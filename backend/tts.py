@@ -5,7 +5,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
 # Default voice: "Rachel" or "Adam"
 VOICE_ID = "21m00Tcm4TlvDq8ikWAM" # Rachel
 
@@ -14,21 +13,24 @@ async def stream_tts(text: str):
     Streams TTS audio bytes from ElevenLabs API for a given sentence.
     Yields raw MP3 or PCM bytes depending on the configuration.
     """
+    load_dotenv(override=True)
+    ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
     if not ELEVENLABS_API_KEY:
         print("Warning: ElevenLabs API Key missing.")
         return
+        
+    print(f"DEBUG: First 5 chars of ElevenLabs Key: {ELEVENLABS_API_KEY[:5]}...")
 
-    url = f"https://api.elevenlabs.io/v1/text-to-speech/{VOICE_ID}/stream"
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{VOICE_ID}/stream?output_format=pcm_16000"
     
     headers = {
-        "Accept": "audio/mpeg",
         "xi-api-key": ELEVENLABS_API_KEY,
         "Content-Type": "application/json"
     }
     
     data = {
         "text": text,
-        "model_id": "eleven_monolingual_v1",
+        "model_id": "eleven_turbo_v2_5",
         "voice_settings": {
             "stability": 0.5,
             "similarity_boost": 0.5

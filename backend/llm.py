@@ -5,13 +5,13 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-client = AsyncGroq(api_key=GROQ_API_KEY)
-
 async def generate_response_stream(prompt: str):
     """
     Streams the response from Groq LLM, yielding complete sentences.
     """
+    GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+    client = AsyncGroq(api_key=GROQ_API_KEY)
+    
     if not GROQ_API_KEY:
         yield "Error: Groq API key is missing."
         return
@@ -24,7 +24,7 @@ async def generate_response_stream(prompt: str):
 
     try:
         stream = await client.chat.completions.create(
-            model="llama3-8b-8192",  # Fast model for voice
+            model="llama-3.1-8b-instant",  # Fast model for voice
             messages=messages,
             stream=True,
             max_tokens=256,

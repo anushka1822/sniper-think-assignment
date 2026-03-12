@@ -1,9 +1,13 @@
 import os
 import json
 import asyncio
+import certifi
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
+
+os.environ["SSL_CERT_FILE"] = certifi.where()
+os.environ["SSL_CERT_DIR"] = certifi.where()
 
 from deepgram import (
     DeepgramClient,
@@ -51,7 +55,7 @@ async def websocket_endpoint(websocket: WebSocket):
     
     # Initialize Deepgram
     deepgram = DeepgramClient(DEEPGRAM_API_KEY)
-    dg_connection = deepgram.listen.asyncwebsocket.v("1")
+    dg_connection = deepgram.listen.asynclive.v("1")
     
     current_transcript = ""
     state = "LISTENING" # LISTENING or SPEAKING
