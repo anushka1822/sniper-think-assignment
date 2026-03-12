@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback } from "react";
 
-const BACKEND_WS_URL = "ws://localhost:8000/ws/stream";
+const BACKEND_WS_URL = `ws://${window.location.hostname}:8000/ws/stream`;
 
 export function useAudioStream() {
   const [isConnected, setIsConnected] = useState(false);
