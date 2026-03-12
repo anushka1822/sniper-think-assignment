@@ -65,6 +65,21 @@ async def websocket_endpoint(websocket: WebSocket):
     
     # Queue for TTS audio to send back
     audio_queue = asyncio.Queue()
+
+    async def safe_send_json(data):
+        try:
+            # Check if websocket state is still open (active)
+            if websocket.client_state.value == 1: 
+                await websocket.send_json(data)
+        except Exception:
+            pass # Connection likely already closed
+
+    async def safe_send_bytes(data):
+        try:
+            if websocket.client_state.value == 1:
+                await websocket.send_bytes(data)
+        except Exception:
+            pass
     
     async def process_ai_response(text: str):
         """
@@ -101,7 +116,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     continue
                 # While we are sending out audio, we are officially "SPEAKING"
                 # The frontend expects binary data.
-                await websocket.send_bytes(chunk)
+                await safe_send_bytes(chunk)
                 audio_queue.task_done()
         except asyncio.CancelledError:
              print("Audio sender task cancelled.")
@@ -111,69 +126,75 @@ async def websocket_endpoint(websocket: WebSocket):
     sender_task = asyncio.create_task(audio_sender())
 
     async def on_message(self, result, **kwargs):
-        nonlocal current_transcript, state, active_generation_task
-        
-        sentence = result.channel.alternatives[0].transcript
-        if not sentence:
-            return
+        try:
+            nonlocal current_transcript, state, active_generation_task
             
-        # BARGE-IN INTERRUPTION LOGIC
-        # If Deepgram hears anything with enough confidence while we are SPEAKING
-        if state == "SPEAKING" and len(sentence.strip()) > 3:
-            print(f"BARGE IN DETECTED: User said '{sentence}'")
-            
-            # 1. Cancel ongoing LLM + TTS streaming
-            if active_generation_task and not active_generation_task.done():
-                active_generation_task.cancel()
-            
-            # 2. Flush the outbound audio queue
-            while not audio_queue.empty():
-                try:
-                    audio_queue.get_nowait()
-                    audio_queue.task_done()
-                except asyncio.QueueEmpty:
-                    break
-                    
-            # 3. Send "interrupt" control message
-            await websocket.send_json({"type": "interrupt"})
-            
-            # 4. Return immediately to listening state
-            state = "LISTENING"
-            current_transcript = sentence # Keep this so we don't lose the interrupted bit
-            return
-            
+            sentence = result.channel.alternatives[0].transcript
+            if not sentence:
+                return
+                
+            # BARGE-IN INTERRUPTION LOGIC
+            # If Deepgram hears anything with enough confidence while we are SPEAKING
+            if state == "SPEAKING" and len(sentence.strip()) > 3:
+                print(f"BARGE IN DETECTED: User said '{sentence}'")
+                
+                # 1. Cancel ongoing LLM + TTS streaming
+                if active_generation_task and not active_generation_task.done():
+                    active_generation_task.cancel()
+                
+                # 2. Flush the outbound audio queue
+                while not audio_queue.empty():
+                    try:
+                        audio_queue.get_nowait()
+                        audio_queue.task_done()
+                    except asyncio.QueueEmpty:
+                        break
+                        
+                # 3. Send "interrupt" control message
+                await safe_send_json({"type": "interrupt"})
+                
+                # 4. Return immediately to listening state
+                state = "LISTENING"
+                current_transcript = sentence # Keep this so we don't lose the interrupted bit
+                return
+                
 
-        if result.is_final:
-            current_transcript += f" {sentence}"
-            if result.speech_final:
-                print(f"Turn Complete (speech_final): [{current_transcript.strip()}]")
+            if result.is_final:
+                current_transcript += f" {sentence}"
+                if result.speech_final:
+                    print(f"Turn Complete (speech_final): [{current_transcript.strip()}]")
+                    
+                    # Start generating AI response
+                    state = "SPEAKING"
+                    if active_generation_task and not active_generation_task.done():
+                        active_generation_task.cancel()
+                        
+                    active_generation_task = asyncio.create_task(
+                        process_ai_response(current_transcript.strip())
+                    )
+                    
+                    current_transcript = ""
+        except Exception as e:
+            print(f"Error in on_message handler: {e}")
+
+    async def on_utterance_end(self, utterance_end, **kwargs):
+        try:
+            nonlocal current_transcript, state, active_generation_task
+            if current_transcript.strip() and state == "LISTENING":
+                print(f"Turn Complete (UtteranceEnd): [{current_transcript.strip()}]")
                 
                 # Start generating AI response
                 state = "SPEAKING"
                 if active_generation_task and not active_generation_task.done():
-                     active_generation_task.cancel()
-                     
+                    active_generation_task.cancel()
+                    
                 active_generation_task = asyncio.create_task(
                     process_ai_response(current_transcript.strip())
                 )
                 
                 current_transcript = ""
-
-    async def on_utterance_end(self, utterance_end, **kwargs):
-        nonlocal current_transcript, state, active_generation_task
-        if current_transcript.strip() and state == "LISTENING":
-            print(f"Turn Complete (UtteranceEnd): [{current_transcript.strip()}]")
-            
-            # Start generating AI response
-            state = "SPEAKING"
-            if active_generation_task and not active_generation_task.done():
-                 active_generation_task.cancel()
-                 
-            active_generation_task = asyncio.create_task(
-                process_ai_response(current_transcript.strip())
-            )
-            
-            current_transcript = ""
+        except Exception as e:
+             print(f"Error in on_utterance_end handler: {e}")
 
     async def on_error(self, error, **kwargs):
         print(f"Deepgram Error: {error}")
